@@ -7,7 +7,17 @@ import admin from 'firebase-admin';
  * resets on every deploy or sleep.
  */
 export const useFirebaseAuthState = async (collectionName) => {
-    const db = admin.firestore();
+    console.log(`[Firebase Auth] Starting setup for collection: "${collectionName}"`);
+    
+    let db;
+    try {
+        db = admin.firestore();
+        console.log(`[Firebase Auth] Firestore reference retrieved successfully.`);
+    } catch (e) {
+        console.error(`[Firebase Auth] Failed to get Firestore reference:`, e.message);
+        throw e;
+    }
+
     const collection = db.collection(collectionName);
 
     const writeData = async (data, id) => {
@@ -16,20 +26,30 @@ export const useFirebaseAuthState = async (collectionName) => {
             const parsed = JSON.parse(stringified);
             await collection.doc(id).set(parsed);
         } catch (error) {
-            console.error(`Firebase write error for ${id}:`, error);
+            console.error(`[Firebase Auth] Write error for "${id}":`, error.message);
         }
     };
 
     const readData = async (id) => {
         try {
-            const doc = await collection.doc(id).get();
+            console.log(`[Firebase Auth] Reading key: "${id}"...`);
+            // Set safety timeout for Firebase operation
+            const fetchPromise = collection.doc(id).get();
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Firebase read timeout (15s). Check credential permissions / network.')), 15000)
+            );
+            
+            const doc = await Promise.race([fetchPromise, timeoutPromise]);
+            
             if (doc.exists) {
+                console.log(`[Firebase Auth] Key "${id}" found in Firestore.`);
                 const data = doc.data();
                 return JSON.parse(JSON.stringify(data), BufferJSON.reviver);
             }
+            console.log(`[Firebase Auth] Key "${id}" does not exist in Firestore yet.`);
             return null;
         } catch (error) {
-            console.error(`Firebase read error for ${id}:`, error);
+            console.error(`[Firebase Auth] Read error for "${id}":`, error.message);
             return null;
         }
     };
@@ -37,12 +57,15 @@ export const useFirebaseAuthState = async (collectionName) => {
     const removeData = async (id) => {
         try {
             await collection.doc(id).delete();
+            console.log(`[Firebase Auth] Deleted key: "${id}"`);
         } catch (error) {
-            console.error(`Firebase remove error for ${id}:`, error);
+            console.error(`[Firebase Auth] Remove error for "${id}":`, error.message);
         }
     };
 
+    console.log(`[Firebase Auth] Fetching initial "creds" key...`);
     const creds = await readData('creds') || initAuthCreds();
+    console.log(`[Firebase Auth] Initial creds configuration loaded.`);
 
     return {
         state: {
