@@ -4,7 +4,6 @@ import pino from 'pino';
 import express from 'express';
 import axios from 'axios';
 import admin from 'firebase-admin';
-import qrcode from 'qrcode-terminal';
 import { useFirebaseAuthState } from './firebaseAuth.js';
 
 // --- CONFIGURATION ---
@@ -14,6 +13,9 @@ const HERMES_URL = process.env.HERMES_URL || 'http://127.0.0.1:8789/v1/chat/comp
 const HERMES_API_KEY = process.env.HERMES_API_KEY || 'hermes-local-key';
 const BOT_SYSTEM_PROMPT = process.env.BOT_SYSTEM_PROMPT || 'Kamu adalah asisten pintar dan ramah.';
 const FIREBASE_COLLECTION = process.env.FIREBASE_COLLECTION || 'baileys_session';
+
+let latestQr = null;
+let isConnected = false;
 
 // Validate Firebase Config
 if (!FIREBASE_CONFIG) {
@@ -44,14 +46,14 @@ async function queryHermes(messageText, senderId) {
                 { role: "system", content: BOT_SYSTEM_PROMPT },
                 { role: "user", content: messageText }
             ],
-            user: senderId, // Useful for Hermes to maintain context if it tracks user IDs
+            user: senderId,
             temperature: 0.7
         }, {
             headers: {
                 'Authorization': `Bearer ${HERMES_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 30000 // 30 seconds timeout
+            timeout: 30000 
         });
 
         return response.data.choices[0].message.content;
@@ -68,7 +70,6 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         auth: state,
         logger,
-        printQRInTerminal: true,
         browser: ['Hermes WA Bot', 'Chrome', '1.0.0']
     });
 
@@ -76,11 +77,12 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log('Scan QR Code ini untuk login:');
-            qrcode.generate(qr, { small: true });
+            console.log('QR Code generated. Buka URL Web Service Anda di endpoint /qr untuk scan.');
+            latestQr = qr;
         }
 
         if (connection === 'close') {
+            isConnected = false;
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
             
@@ -88,9 +90,12 @@ async function connectToWhatsApp() {
                 setTimeout(connectToWhatsApp, 3000);
             } else {
                 console.log('You are logged out. Please clear the Firebase collection to scan QR again.');
+                latestQr = null; // Terjadi logout, hapus QR
             }
         } else if (connection === 'open') {
             console.log('WhatsApp connection opened!');
+            isConnected = true;
+            latestQr = null; // Hapus QR dari memori setelah berhasil terhubung
         }
     });
 
@@ -105,21 +110,15 @@ async function connectToWhatsApp() {
         const senderId = msg.key.remoteJid;
         const isGroup = senderId.endsWith('@g.us');
         
-        // Optional: Ignore groups by default
         if (isGroup && process.env.IGNORE_GROUPS === 'true') return;
 
         const messageContent = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        if (!messageContent) return; // Ignore non-text messages for now
+        if (!messageContent) return;
 
         console.log(`Received message from ${senderId}: ${messageContent}`);
 
-        // Show typing indicator
         await sock.sendPresenceUpdate('composing', senderId);
-
-        // Query Hermes API
         const hermesReply = await queryHermes(messageContent, senderId);
-
-        // Send reply
         await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
     });
 }
@@ -127,7 +126,6 @@ async function connectToWhatsApp() {
 connectToWhatsApp();
 
 // --- EXPRESS SERVER ---
-// Required for Render so it binds to a port and doesn't kill the process
 const app = express();
 
 app.get('/', (req, res) => {
@@ -136,6 +134,53 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
+});
+
+// Endpoint untuk merender halaman QR Code dengan rapi (agar bisa discan)
+app.get('/qr', (req, res) => {
+    if (isConnected) {
+        return res.send('<h2 style="color: green; text-align: center; font-family: Arial;">WhatsApp sudah berhasil terhubung! 🎉</h2>');
+    }
+    if (!latestQr) {
+        return res.send('<h2 style="text-align: center; font-family: Arial;">QR Code belum siap atau sedang dimuat ulang.<br>Silakan refresh halaman ini (F5) dalam beberapa detik lagi.</h2>');
+    }
+    
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Scan QR Code WhatsApp Bot</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+            <style>
+                body { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; text-align: center;}
+                #qrcode { margin: 20px auto; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: inline-block; }
+                h2 { color: #128c7e; margin-bottom: 5px;}
+                p { color: #555; }
+            </style>
+        </head>
+        <body>
+            <h2>Hubungkan Bot WhatsApp</h2>
+            <p>Buka WhatsApp di HP Anda ➔ Perangkat Taut ➔ Tautkan Perangkat</p>
+            <div id="qrcode"></div>
+            <p><small>Halaman ini akan refresh otomatis setiap 15 detik</small></p>
+            
+            <script>
+                new QRCode(document.getElementById("qrcode"), {
+                    text: "${latestQr}",
+                    width: 256,
+                    height: 256,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.M
+                });
+                
+                // Auto refresh
+                setTimeout(() => { location.reload(); }, 15000);
+            </script>
+        </body>
+        </html>
+    `);
 });
 
 app.listen(PORT, () => {
