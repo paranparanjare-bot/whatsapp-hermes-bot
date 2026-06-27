@@ -119,9 +119,10 @@ async function connectToWhatsApp() {
 
         console.log(`Received message from ${senderId}: ${messageContent}`);
 
-        await sock.sendPresenceUpdate('composing', senderId);
-        const hermesReply = await queryHermes(messageContent, senderId);
-        await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
+        // Bot dibuat TULI: Hanya mencatat pesan (log) untuk melihat ID Grup, tidak membalas apa-apa.
+        // await sock.sendPresenceUpdate('composing', senderId);
+        // const hermesReply = await queryHermes(messageContent, senderId);
+        // await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
     });
 }
 
