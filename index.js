@@ -117,24 +117,54 @@ async function connectToWhatsApp() {
 
         console.log(`Received message from ${senderId}: ${messageContent}`);
 
-        // Konfigurasi Admin (Tuli untuk selain admin ini)
+        // Konfigurasi Admin
         const ADMIN_ID = '178206950817860';
         
         if (isGroup) {
-            // TULI di semua grup (hanya mencatat log untuk melihat ID grup saat dibutuhkan)
-            return;
+            return; // Tuli di grup
         } else {
-            // Jika DM, pastikan pengirim adalah Admin (mendukung format @lid maupun @s.whatsapp.net)
             if (!senderId.startsWith(ADMIN_ID)) {
                 console.log(`Mengabaikan DM dari non-admin: ${senderId}`);
                 return;
             }
         }
 
-        // Lolos pengecekan -> Balas pesan DM Admin
+        // --- SISTEM AUTO CLEAR CHAT / RESET SESSION ---
+        // Karena Render menyimpan variabel di memory (RAM), kita bisa mencatat jumlah chat di memori.
+        // Jika Render restart, memori ini mulai dari 0 lagi (yang mana bagus untuk performa Hermes).
+        if (!global.chatCounter) global.chatCounter = {};
+        
+        const MAX_CHAT_HISTORY = 10; // Nila ideal untuk bot WA agar tetap ringan
+
+        // Jika user mengetik manual "/clear" atau "/reset"
+        if (messageContent.toLowerCase() === '/clear' || messageContent.toLowerCase() === '/reset') {
+            global.chatCounter[senderId] = 0;
+            // Ubah senderId sedikit agar Hermes menganggap ini sesi baru
+            await sock.sendMessage(senderId, { text: '🔄 Sesi obrolan dan ingatan jangka pendek telah direset. Silakan mulai topik baru.' });
+            return;
+        }
+
+        if (!global.chatCounter[senderId]) {
+            global.chatCounter[senderId] = 1;
+        } else {
+            global.chatCounter[senderId]++;
+        }
+
+        // Modifikasi senderId yang dikirim ke Hermes untuk membuat sesi baru di backend
+        // Kita menggunakan pembagian (Math.floor) agar ID ganti setiap MAX_CHAT_HISTORY tercapai.
+        const sessionCycle = Math.floor(global.chatCounter[senderId] / MAX_CHAT_HISTORY);
+        const virtualSessionId = `${senderId}_cycle_${sessionCycle}`;
+
         await sock.sendPresenceUpdate('composing', senderId);
-        const hermesReply = await queryHermes(messageContent, senderId);
-        await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
+        // Kirim virtualSessionId ke Hermes, bukan senderId asli.
+        const hermesReply = await queryHermes(messageContent, virtualSessionId);
+        
+        // Cek jika saat ini tepat pada batas reset (untuk memberitahu user)
+        if (global.chatCounter[senderId] % MAX_CHAT_HISTORY === 0) {
+            await sock.sendMessage(senderId, { text: hermesReply + "\n\n*(Memori sesi ini telah mencapai batas dan direset untuk menjaga kecepatan respon)*" }, { quoted: msg });
+        } else {
+            await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
+        }
     });
 }
 
