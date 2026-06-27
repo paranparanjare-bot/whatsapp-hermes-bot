@@ -72,6 +72,8 @@ async function connectToWhatsApp() {
         logger,
         browser: ['Hermes WA Bot', 'Chrome', '1.0.0']
     });
+    
+    sockInstance = sock; // Simpan ke variabel global untuk Express
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -127,6 +129,7 @@ connectToWhatsApp();
 
 // --- EXPRESS SERVER ---
 const app = express();
+app.use(express.json()); // Tambahkan middleware untuk parsing JSON body
 
 app.get('/', (req, res) => {
     res.send('WhatsApp Hermes Bot is running.');
@@ -134,6 +137,35 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
+});
+
+// Endpoint proaktif untuk mengirim pesan (digunakan oleh Cronjob Hermes)
+let sockInstance = null; // Menyimpan instance sock agar bisa diakses express
+
+app.post('/api/sendText', async (req, res) => {
+    try {
+        if (!sockInstance || !isConnected) {
+            return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+        }
+        
+        const { chatId, text, apiKey } = req.body;
+        
+        // Simple Auth (Gunakan API_KEY yang sama dengan HERMES_API_KEY atau API_KEY khusus di Render)
+        const expectedApiKey = process.env.API_KEY || 'hermes-cron-key';
+        if (apiKey !== expectedApiKey) {
+            return res.status(401).json({ success: false, error: 'Unauthorized' });
+        }
+        
+        if (!chatId || !text) {
+            return res.status(400).json({ success: false, error: 'chatId and text are required' });
+        }
+
+        await sockInstance.sendMessage(chatId, { text: text });
+        res.status(200).json({ success: true, message: 'Message sent successfully' });
+    } catch (error) {
+        console.error("Error in /api/sendText:", error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 // Endpoint untuk merender halaman QR Code dengan rapi (agar bisa discan)
