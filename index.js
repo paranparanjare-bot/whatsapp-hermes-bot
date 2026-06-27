@@ -53,7 +53,7 @@ async function queryHermes(messageText, senderId) {
                 'Authorization': `Bearer ${HERMES_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 30000 
+            timeout: 120000 // Diperpanjang menjadi 120 detik (2 menit) agar Hermes punya cukup waktu berfikir dan eksekusi 
         });
 
         return response.data.choices[0].message.content;
