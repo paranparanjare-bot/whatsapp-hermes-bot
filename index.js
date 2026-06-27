@@ -112,17 +112,29 @@ async function connectToWhatsApp() {
         const senderId = msg.key.remoteJid;
         const isGroup = senderId.endsWith('@g.us');
         
-        if (isGroup && process.env.IGNORE_GROUPS === 'true') return;
-
         const messageContent = msg.message.conversation || msg.message.extendedTextMessage?.text;
         if (!messageContent) return;
 
         console.log(`Received message from ${senderId}: ${messageContent}`);
 
-        // Bot dibuat TULI: Hanya mencatat pesan (log) untuk melihat ID Grup, tidak membalas apa-apa.
-        // await sock.sendPresenceUpdate('composing', senderId);
-        // const hermesReply = await queryHermes(messageContent, senderId);
-        // await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
+        // Konfigurasi Admin (Tuli untuk selain admin ini)
+        const ADMIN_ID = '178206950817860';
+        
+        if (isGroup) {
+            // TULI di semua grup (hanya mencatat log untuk melihat ID grup saat dibutuhkan)
+            return;
+        } else {
+            // Jika DM, pastikan pengirim adalah Admin (mendukung format @lid maupun @s.whatsapp.net)
+            if (!senderId.startsWith(ADMIN_ID)) {
+                console.log(`Mengabaikan DM dari non-admin: ${senderId}`);
+                return;
+            }
+        }
+
+        // Lolos pengecekan -> Balas pesan DM Admin
+        await sock.sendPresenceUpdate('composing', senderId);
+        const hermesReply = await queryHermes(messageContent, senderId);
+        await sock.sendMessage(senderId, { text: hermesReply }, { quoted: msg });
     });
 }
 
