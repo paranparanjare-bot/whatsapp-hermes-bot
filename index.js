@@ -121,19 +121,37 @@ async function connectToWhatsApp() {
         const cleanSenderNumber = senderId.split('@')[0].replace(/\D/g, '');
 
         // --- SISTEM PENDAFTARAN & REQUEST PIN SUTRA MOTJO (UNTUK PENGGUNA UMUM) ---
-        // Format pendaftaran yang dipicu oleh link web: "Daftar Motjo" atau "/pin" atau mengandung kata "Daftar Motjo"
+        // Format pendaftaran yang dipicu oleh link web: "Daftar Motjo [Nomor]" atau "/pin" atau mengandung kata "Daftar Motjo"
         const lowerMsg = messageContent.toLowerCase().trim();
         const isDaftarPattern = lowerMsg.includes('daftar motjo') || lowerMsg === '/pin' || lowerMsg === 'pin';
 
         if (isDaftarPattern && !isGroup) {
-            // Sembunyikan formula detail ke user, langsung berikan PIN yang dihitung
-            if (cleanSenderNumber.length >= 10) {
-                const pinDigit1 = cleanSenderNumber[4];
-                const pinDigit2 = cleanSenderNumber[6];
-                const pinDigit3 = cleanSenderNumber[8];
+            let targetPhone = "";
+
+            // Cek apakah ada nomor HP yang tertulis di dalam isi pesan (regex mencari deretan angka minimal 10 digit)
+            const phoneMatch = messageContent.match(/(08\d{8,12}|628\d{8,12}|\+628\d{8,12})/);
+            if (phoneMatch) {
+                // Ambil nomor yang ditulis di pesan dan bersihkan non-digit
+                targetPhone = phoneMatch[0].replace(/\D/g, '');
+            } else {
+                // Fallback ke JID pengirim jika tidak menulis nomor di teks pesan
+                targetPhone = senderId.split('@')[0].replace(/\D/g, '');
+            }
+
+            // Normalisasi paksa awalan lokal 08xxx menjadi format internasional 628xxx
+            if (targetPhone.startsWith('0')) {
+                targetPhone = '62' + targetPhone.slice(1);
+            }
+
+            // Validasi panjang nomor HP hasil normalisasi
+            if (targetPhone.length >= 10 && targetPhone.startsWith('62')) {
+                // Kalkulasi PIN berdasarkan nomor HP yang telah dinormalisasi
+                const pinDigit1 = targetPhone[4];
+                const pinDigit2 = targetPhone[6];
+                const pinDigit3 = targetPhone[8];
                 const generatedPin = pinDigit1 + pinDigit2 + pinDigit3;
 
-                // Cari apakah ada payload referral di pesan (misalnya: "Daftar Motjo ref_6285xxx")
+                // Cari apakah ada payload referral di pesan (misalnya: "Daftar Motjo 0898xxx ref_6285xxx")
                 let referrer = null;
                 const refMatch = messageContent.match(/ref_(\d+)/);
                 if (refMatch) {
@@ -145,7 +163,7 @@ async function connectToWhatsApp() {
                 // Hubungi Cloudflare Workers untuk mencatat/mengaktifkan user di database D1
                 try {
                     const cfResponse = await axios.post('https://motjo-worker.gnet-bwi.workers.dev/api/internal/register-wa', {
-                        phone: cleanSenderNumber,
+                        phone: targetPhone,
                         referrer: referrer
                     }, {
                         headers: {
@@ -158,9 +176,9 @@ async function connectToWhatsApp() {
                     const isNewUser = cfResponse.data.is_new;
                     let replyText = "";
                     if (isNewUser) {
-                        replyText = `Selamat! Pendaftaran perpustakaan *motjo* Anda berhasil.\n\nNomor WA Anda: *${cleanSenderNumber}* kini aktif.\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
+                        replyText = `Selamat! Pendaftaran perpustakaan *motjo* Anda berhasil.\n\nNomor WA Anda: *${targetPhone}* kini aktif.\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
                     } else {
-                        replyText = `Akun Anda sudah aktif sebelumnya.\n\nNomor WA Anda: *${cleanSenderNumber}*\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
+                        replyText = `Akun Anda sudah aktif sebelumnya.\n\nNomor WA Anda: *${targetPhone}*\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
                     }
 
                     await sock.sendMessage(senderId, { text: replyText });
