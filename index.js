@@ -117,13 +117,70 @@ async function connectToWhatsApp() {
 
         console.log(`Received message from ${senderId}: ${messageContent}`);
 
-        // Konfigurasi Admin
+        // Extract clean numbers only (e.g. 62895428301010)
+        const cleanSenderNumber = senderId.split('@')[0].replace(/\D/g, '');
+
+        // --- SISTEM PENDAFTARAN & REQUEST PIN SUTRA MOTJO (UNTUK PENGGUNA UMUM) ---
+        // Format pendaftaran yang dipicu oleh link web: "Daftar Motjo" atau "/pin" atau mengandung kata "Daftar Motjo"
+        const lowerMsg = messageContent.toLowerCase().trim();
+        const isDaftarPattern = lowerMsg.includes('daftar motjo') || lowerMsg === '/pin' || lowerMsg === 'pin';
+
+        if (isDaftarPattern && !isGroup) {
+            // Sembunyikan formula detail ke user, langsung berikan PIN yang dihitung
+            if (cleanSenderNumber.length >= 10) {
+                const pinDigit1 = cleanSenderNumber[4];
+                const pinDigit2 = cleanSenderNumber[6];
+                const pinDigit3 = cleanSenderNumber[8];
+                const generatedPin = pinDigit1 + pinDigit2 + pinDigit3;
+
+                // Cari apakah ada payload referral di pesan (misalnya: "Daftar Motjo ref_6285xxx")
+                let referrer = null;
+                const refMatch = messageContent.match(/ref_(\d+)/);
+                if (refMatch) {
+                    referrer = refMatch[1];
+                }
+
+                await sock.sendPresenceUpdate('composing', senderId);
+
+                // Hubungi Cloudflare Workers untuk mencatat/mengaktifkan user di database D1
+                try {
+                    const cfResponse = await axios.post('https://motjo-worker.gnet-bwi.workers.dev/api/internal/register-wa', {
+                        phone: cleanSenderNumber,
+                        referrer: referrer
+                    }, {
+                        headers: {
+                            'Authorization': 'Bearer hermes-cron-key',
+                            'Content-Type': 'application/json'
+                        },
+                        timeout: 10000
+                    });
+
+                    const isNewUser = cfResponse.data.is_new;
+                    let replyText = "";
+                    if (isNewUser) {
+                        replyText = `Selamat! Pendaftaran perpustakaan *motjo* Anda berhasil.\n\nNomor WA Anda: *${cleanSenderNumber}* kini aktif.\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
+                    } else {
+                        replyText = `Akun Anda sudah aktif sebelumnya.\n\nNomor WA Anda: *${cleanSenderNumber}*\nGunakan PIN masuk Anda: *${generatedPin}* untuk masuk di web.`;
+                    }
+
+                    await sock.sendMessage(senderId, { text: replyText });
+                    return;
+                } catch (err) {
+                    console.error("Failed to register user to Cloudflare Workers:", err.message);
+                    await sock.sendMessage(senderId, { text: "Maaf, pendaftaran sedang mengalami gangguan teknis di server. Silakan coba beberapa saat lagi." });
+                    return;
+                }
+            }
+        }
+
+        // Konfigurasi Admin (Hanya Admin yang bisa chat santai dengan "Otak Hermes" untuk interaksi asisten)
         const ADMIN_ID = '178206950817860';
         
         if (isGroup) {
-            return; // Tuli di grup
+            return; // Bisu di grup
         } else {
             if (!senderId.startsWith(ADMIN_ID)) {
+                // BISU TOTAL untuk orang asing yang mengirim pesan selain format registrasi
                 console.log(`Mengabaikan DM dari non-admin: ${senderId}`);
                 return;
             }
